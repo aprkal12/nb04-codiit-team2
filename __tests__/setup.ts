@@ -8,7 +8,7 @@ console.log('Test Setup');
 // const __filename = fileURLToPath(import.meta.url);
 // const __dirname = dirname(__filename);
 
-// config({ path: resolve(__dirname, '../../.env.test'), override: true });
+// config({ path: resolve(__dirname, '../.env.test'), override: true });
 
 // // beforeAll(async () => {
 // //   await connectToRedis();
