@@ -3,6 +3,7 @@ import { env } from '@/config/constants.js';
 import { CreateUserDto } from '@/domains/user/user.schema.js';
 import { UserRepository } from '@/domains/user/user.repository.js';
 import type { UserResponseDto, UserWithGrade } from '@/domains/user/user.dto.js';
+import { ConflictError } from '@/common/utils/errors.js';
 
 export class UserService {
   private userRepository: UserRepository;
@@ -13,6 +14,11 @@ export class UserService {
 
   async createUser(dto: CreateUserDto): Promise<UserResponseDto> {
     const { name, email, password, type } = dto;
+
+    const existingUser = await this.userRepository.findByEmail(email);
+    if (existingUser) {
+      throw new ConflictError('이미 존재하는 이메일입니다.');
+    }
 
     const hashedPassword = await bcrypt.hash(password, Number(env.BCRYPT_ROUNDS));
 
