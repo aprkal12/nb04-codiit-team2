@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { ReviewRepository } from './review.repository.js';
 import { CreateReviewDto, ReviewResponseDto } from './review.dto.js';
 import { ReviewMapper } from './review.mapper.js';
@@ -28,14 +29,25 @@ export class ReviewService {
       throw new BadRequestError('주문한 상품 정보와 일치하지 않습니다.');
     }
 
-    // 중복 리뷰 검증: 이미 해당 주문 건에 대해 리뷰를 작성했는지 확인
+    // 빠른 실패를 위한 어플리케이션 레벨 검증
+    // 이 코드가 있어도 동시성 이슈는 발생할 수 있지만, 일반적인 상황에서 DB 요청을 아껴줍니다.
     if (orderItem.review) {
       throw new BadRequestError('이미 리뷰를 작성한 주문 건입니다.');
     }
 
-    // 리뷰 생성
-    const review = await this.reviewRepository.create(userId, productId, data);
+    try {
+      // 리뷰 생성 (동시성 문제 해결 구간)
+      // DB의 Unique Constraint(orderItemId)가 중복을 막아줍니다.
+      const review = await this.reviewRepository.create(userId, productId, data);
+      return ReviewMapper.toResponse(review);
+    } catch (error) {
+      // Prisma Unique Constraint Violation 에러 코드: P2002
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new BadRequestError('이미 리뷰를 작성한 주문 건입니다.');
+      }
 
-    return ReviewMapper.toResponse(review);
+      // 예상치 못한 다른 에러는 그대로 던짐
+      throw error;
+    }
   }
 }
