@@ -1,9 +1,4 @@
-import {
-  ProductRawData,
-  ProductResponse,
-  SizeRawData,
-  SizeResponse,
-} from '@/domains/cart/cart.type.js';
+import { SizeRawData, SizeResponse } from '@/domains/cart/cart.type.js';
 import { CreateOrderItemBody } from '@/domains/order/order.schema.js';
 
 // 주문 베이스
@@ -25,11 +20,29 @@ export interface OrderItemBase {
   productId: string;
 }
 
-interface ReviewRawData {
-  id: string;
+export interface ProductBase {
+  name: string;
+  image: string;
 }
 
-interface ReviewResponse {
+export interface ReviewBase<TDate> {
+  id: string;
+  rating: number;
+  content: string;
+  createdAt: TDate;
+}
+
+export type ProductRawData = ProductBase;
+
+export interface ProductResponse extends ProductBase {
+  reviews: ReviewResponse[];
+}
+
+export type ReviewRawData = ReviewBase<Date>;
+
+export type ReviewResponse = ReviewBase<string>;
+
+interface OrderItemsReviewResponse {
   isReviewed: boolean;
 }
 
@@ -51,4 +64,4 @@ export interface GetOrderItemRawData extends GetOrderItemBase<ProductRawData, Si
 
 // response 응답용 data type
 export interface GetOrderItemResponseData
-  extends GetOrderItemBase<ProductResponse, OrderItemSizeResponse>, ReviewResponse {}
+  extends GetOrderItemBase<ProductResponse, OrderItemSizeResponse>, OrderItemsReviewResponse {}

@@ -40,6 +40,10 @@ export interface GetOrderRawData extends OrderBase<Date> {
   orderItems: GetOrderItemRawData[];
 }
 
+export interface CreateOrderRawData extends OrderBase<Date> {
+  buyerId: string;
+}
+
 // service
 export interface CreateOrderServiceInput extends CreateOrderBody {
   userId: string;
@@ -48,4 +52,9 @@ export interface CreateOrderServiceInput extends CreateOrderBody {
 // response
 export interface GetOrderResponseData extends OrderBase<string> {
   orderItems: GetOrderItemResponseData[];
+}
+
+export interface CreateOrderResponseData extends OrderBase<string> {
+  userId: string;
+  updatedAt: string;
 }

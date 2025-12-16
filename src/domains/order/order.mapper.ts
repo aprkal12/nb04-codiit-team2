@@ -1,12 +1,20 @@
-import { toProductResponse } from '@/domains/cart/cart.mapper.js';
 import { SizeRawData } from '@/domains/cart/cart.type.js';
-import { GetOrderRawData, GetOrderResponseData } from '@/domains/order/order.dto.js';
+import {
+  CreateOrderRawData,
+  CreateOrderResponseData,
+  GetOrderRawData,
+  GetOrderResponseData,
+} from '@/domains/order/order.dto.js';
 import {
   GetOrderItemRawData,
   GetOrderItemResponseData,
   OrderBase,
   OrderItemBase,
   OrderItemSizeResponse,
+  ProductRawData,
+  ProductResponse,
+  ReviewRawData,
+  ReviewResponse,
 } from '@/domains/order/order.type.js';
 
 const toOrderBaseResponse = (order: OrderBase<Date>): OrderBase<string> => ({
@@ -27,6 +35,19 @@ const toOrderItemBaseResponse = (orderItem: OrderItemBase): OrderItemBase => ({
   productId: orderItem.productId,
 });
 
+const toReviewResponse = (review: ReviewRawData): ReviewResponse => ({
+  id: review.id,
+  rating: review.rating,
+  content: review.content,
+  createdAt: review.createdAt.toISOString(),
+});
+
+const toProductResponse = (product: ProductRawData, review: ReviewResponse[]): ProductResponse => ({
+  name: product.name,
+  image: product.image,
+  reviews: review,
+});
+
 const toSizeResponse = (size: SizeRawData): OrderItemSizeResponse => ({
   id: size.id,
   size: {
@@ -39,13 +60,24 @@ const toOrderItemResponse = (orderItemRawData: GetOrderItemRawData): GetOrderIte
   const { review, product, size, ...rest } = orderItemRawData;
   return {
     ...toOrderItemBaseResponse(rest),
-    product: toProductResponse(product),
+    product: toProductResponse(product, review ? [toReviewResponse(review)] : []),
     size: toSizeResponse(size),
     isReviewed: !!review,
   };
 };
-
-export const toOrderResponse = (rawOrder: GetOrderRawData): GetOrderResponseData => ({
+/**
+ * GET - /api/orders/{orderId} 주문 상세 조회 Response
+ */
+export const toGetOrderResponse = (rawOrder: GetOrderRawData): GetOrderResponseData => ({
   ...toOrderBaseResponse(rawOrder),
   orderItems: rawOrder.orderItems.map(toOrderItemResponse),
+});
+/**
+ * POST - /api/orders 주문 생성 Response
+ */
+export const toCreateOrderResponse = (rawOrder: CreateOrderRawData): CreateOrderResponseData => ({
+  ...toOrderBaseResponse(rawOrder),
+  userId: rawOrder.buyerId,
+  updatedAt: rawOrder.createdAt.toISOString(), // 주문 생성 api에서만 요구하는 필드
+  // 굳이 스키마에 updatedAt 추가할 필요 없어보임
 });
