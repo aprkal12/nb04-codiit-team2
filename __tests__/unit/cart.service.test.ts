@@ -1,16 +1,16 @@
 // 빌드에 test를 포함하지않으면 vscode에서는 tsconfig만 확인하기 때문에 경로 별칭이 에러뜸
 // Cannot find module '@/domains/cart/cart.service.js' or its corresponding type declarations.ts(2307)
 // 하지만 jest.config.cjs에 설정된 매핑옵션이 있기 때문에 실제로 돌렸을 때는 에러가 발생하지 않음
-import { CartService } from '../../src/domains/cart/cart.service';
-import { CartRepository } from '../../src/domains/cart/cart.repository';
+import { CartService } from '../../src/domains/cart/cart.service.js';
+import { CartRepository } from '../../src/domains/cart/cart.repository.js';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import { BadRequestError, NotFoundError, ForbiddenError } from '../../src/common/utils/errors';
+import { BadRequestError, NotFoundError, ForbiddenError } from '../../src/common/utils/errors.js';
 import {
   createCartBaseMock,
   createCartItemDetailMock,
   createCartItemMock,
   createCartMock,
-} from '../mocks/cart.mock.ts';
+} from '../mocks/cart.mock.js';
 import { mockDeep, DeepMockProxy } from 'jest-mock-extended';
 import { PrismaClient } from '@prisma/client';
 
@@ -102,7 +102,8 @@ describe('CartService', () => {
       // given
       const cartItemsRawData = [createCartItemMock()];
       mockCartRepo.findCartIdByUserId.mockResolvedValue({ id: 'cart-id-1' });
-      mockPrisma.$transaction.mockImplementation(async (callback) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockPrisma.$transaction.mockImplementation(async (callback: any) => {
         return callback(mockPrisma);
       });
       mockCartRepo.updateCart.mockResolvedValue(cartItemsRawData[0]);
