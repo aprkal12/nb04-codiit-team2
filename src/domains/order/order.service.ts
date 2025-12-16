@@ -9,7 +9,7 @@ import { PaymentStatus, PrismaClient } from '@prisma/client';
 import { CreateOrderItemInputWithPrice } from '@/domains/order/order.type.js';
 import {
   BadRequestError,
-  InternalServerError,
+  ForbiddenError,
   NotFoundError,
   UnauthorizedError,
 } from '@/common/utils/errors.js';
@@ -19,6 +19,16 @@ export class OrderService {
     private orderRepository: OrderRepository,
     private prisma: PrismaClient,
   ) {}
+  async getOrder(userId: string, orderId: string) {
+    const order = await this.orderRepository.findById(orderId);
+    if (!order) {
+      throw new NotFoundError('주문을 찾을 수 없습니다.');
+    }
+    if (order.buyerId !== userId) {
+      throw new ForbiddenError('접근 권한이 없습니다.');
+    }
+    return order;
+  }
   async createOrder({
     userId,
     name,
@@ -69,7 +79,7 @@ export class OrderService {
     );
 
     // 1. 주문 생성
-    const createdOrderId = await this.prisma.$transaction(async (tx) => {
+    return await this.prisma.$transaction(async (tx) => {
       // 1-1 . 주문 생성
       orderData = {
         userId,
@@ -124,13 +134,7 @@ export class OrderService {
       // 장바구니 삭제는 따로 안하는 것 같음
       // 주문 성공 후 프론트쪽에서 /api/cart/{cartId} delete로 주문이 들어간 아이템들만 삭제 요청 보내는 것 확인
       // 유저의 장바구니가 생성되면 삭제하지 않고 주문할 때마다 주문한 아이템들만 삭제하는 방식인 것 같음
-      return order.id;
+      return order;
     });
-    // 2. 결과값 반환
-    const createdOrder = await this.orderRepository.findById(createdOrderId);
-    if (!createdOrder) {
-      throw new InternalServerError();
-    }
-    return createdOrder;
   }
 }
