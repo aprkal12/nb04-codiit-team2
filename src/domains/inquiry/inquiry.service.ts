@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { PrismaClient, Prisma } from '@prisma/client';
 import type {
   OffsetQuery,
   CreateInquiryBody,
@@ -7,10 +7,16 @@ import type {
   UpdateReplyBody,
 } from './inquiry.dto.js';
 import type { InquiryRepository } from './inquiry.repository.js';
+import type { NotificationService } from '@/domains/notification/notification.service.js';
 import { NotFoundError, ForbiddenError, BadRequestError } from '@/common/utils/errors.js';
+import { sseManager } from '@/common/utils/sse.manager.js';
 
 export class InquiryService {
-  constructor(private inquiryRepository: InquiryRepository) {}
+  constructor(
+    private inquiryRepository: InquiryRepository,
+    private notificationService: NotificationService,
+    private prisma: PrismaClient,
+  ) {}
 
   // 특정 상품의 모든 문의 조회
   public getInquiries = async (productId: string) => {
@@ -64,9 +70,35 @@ export class InquiryService {
       },
     };
 
-    const inquiry = await this.inquiryRepository.createInquiry(createData);
+    // 트랜잭션 사용
+    const result = await this.prisma.$transaction(async (tx) => {
+      // 문의 생성
+      const inquiry = await this.inquiryRepository.createInquiry(createData, tx);
 
-    return inquiry;
+      // 본인 상품에 타인의 문의가 생성될 경우 알림 생성
+      if (findProduct.store.userId !== userId) {
+        const notificationData = {
+          userId: findProduct.store.userId,
+          content: `${findProduct.name}에 새로운 문의가 등록되었습니다.`,
+        };
+
+        // 알림 생성
+        const notification = await this.notificationService.createNotification(
+          notificationData,
+          tx,
+        );
+        return { inquiry, notification };
+      }
+
+      return { inquiry, notification: null };
+    });
+
+    // sse 전송
+    if (result.notification) {
+      sseManager.sendMessage(result.notification.userId, result.notification);
+    }
+
+    return result.inquiry;
   };
 
   // 모든 문의 조회 (사용자 본인의 문의)
@@ -187,9 +219,36 @@ export class InquiryService {
     };
 
     // 트랜잭션 사용
-    const reply = await this.inquiryRepository.createReply(createData, id, updateData);
+    const result = await this.prisma.$transaction(async (tx) => {
+      // 답변 생성
+      const reply = await this.inquiryRepository.createReply(createData, tx);
+      // 문의 상태 변경
+      await this.inquiryRepository.updateStatusInquiry(updateData, id, tx);
 
-    return reply;
+      // 본인 문의에 타인의 답변이 생성될 경우 알림 생성
+      if (findInquiry.userId !== userId) {
+        const notificationData = {
+          userId: findInquiry.userId,
+          content: `${findInquiry.product.name}에 대한 문의에 답변이 달렸습니다.`,
+        };
+
+        // 알림 생성
+        const notification = await this.notificationService.createNotification(
+          notificationData,
+          tx,
+        );
+        return { reply, notification };
+      }
+
+      return { reply, notification: null };
+    });
+
+    // sse 전송
+    if (result.notification) {
+      sseManager.sendMessage(result.notification.userId, result.notification);
+    }
+
+    return result.reply;
   };
 
   // 답변 수정

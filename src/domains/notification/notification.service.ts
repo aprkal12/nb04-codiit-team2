@@ -1,7 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import type { NotificationRepository } from './notification.repository.js';
 import type { CreateNotificationBody } from './notification.type.js';
-// import { sseManager } from '../../common/utils/sse.manager.js';
+import { sseManager } from '@/common/utils/sse.manager.js';
 
 export class NotificationService {
   constructor(private notificationRepository: NotificationRepository) {}
@@ -21,8 +21,11 @@ export class NotificationService {
   };
 
   // 알림 생성
-  createNotification = async (data: CreateNotificationBody) => {
-    const { userId, content } = data;
+  createNotification = async (
+    notificationData: CreateNotificationBody,
+    tx?: Prisma.TransactionClient,
+  ) => {
+    const { userId, content } = notificationData;
 
     const createData: Prisma.NotificationCreateInput = {
       user: {
@@ -33,11 +36,12 @@ export class NotificationService {
       content,
     };
 
-    const notification = await this.notificationRepository.createNotification(createData);
+    const notification = await this.notificationRepository.createNotification(createData, tx);
 
-    // sse 전송
-    // TODO 다음 PR에 올리겠습니다.
-    // sseManager.sendMessage(userId, notification);
+    if (!tx) {
+      // sse 전송
+      sseManager.sendMessage(userId, notification);
+    }
 
     return notification;
   };

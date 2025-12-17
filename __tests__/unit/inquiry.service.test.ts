@@ -1,6 +1,8 @@
 import { jest } from '@jest/globals';
+import type { PrismaClient, Prisma } from '@prisma/client';
 import { InquiryRepository } from '../../src/domains/inquiry/inquiry.repository.js';
 import { InquiryService } from '../../src/domains/inquiry/inquiry.service.js';
+import { NotificationService } from '../../src/domains/notification/notification.service.js';
 import { InquiryStatus } from '@prisma/client';
 import { mockDeep, DeepMockProxy } from 'jest-mock-extended';
 import { inquiryId, replyId, productId, userId } from '../mocks/inquiry.mock.js';
@@ -12,18 +14,36 @@ import {
   mockInquiry,
   mockFindProduct,
   mockFindInquiry,
+  mockInquiryOwnedByOtherUser,
+  mockUpdateInquiryStatus,
   mockFindReply,
 } from '../mocks/inquiry.mock.js';
+import { createNotificationMock } from '../mocks/notification.mock.js';
+import type { TxMock } from '../helpers/test.type.js';
+import { sseManager } from '../../src/common/utils/sse.manager.js';
+
+// sse 타입 정의
+type SendMessageFn = (userId: string, message: Notification) => void;
 
 describe('InquiryService 유닛 테스트', () => {
   let inquiryService: InquiryService;
   let inquiryRepository: DeepMockProxy<InquiryRepository>;
+  let notificationService: DeepMockProxy<NotificationService>;
+  let prisma: DeepMockProxy<PrismaClient>;
+  let sendMessageSpy: SendMessageFn & jest.Mock;
 
   // 테스트 케이스가 실행되기 전에 매번 실행
   beforeEach(() => {
     // 의존성 주입
     inquiryRepository = mockDeep<InquiryRepository>();
-    inquiryService = new InquiryService(inquiryRepository);
+    notificationService = mockDeep<NotificationService>();
+    prisma = mockDeep<PrismaClient>();
+    inquiryService = new InquiryService(inquiryRepository, notificationService, prisma);
+
+    // sse 스파이
+    sendMessageSpy = jest
+      .spyOn(sseManager, 'sendMessage')
+      .mockImplementation(() => {}) as SendMessageFn & jest.Mock;
   });
 
   // 각 테스트가 끝난 후 모든 모의(mock)를 원래대로 복원
@@ -80,7 +100,7 @@ describe('InquiryService 유닛 테스트', () => {
 
   // 문의 생성
   describe('createInquiry', () => {
-    it('문의 생성 성공', async () => {
+    it('문의 생성 성공 (타인 상품에 문의하여 알림 생성)', async () => {
       // --- 준비 (Arrange) ---
       const data = {
         title: '문의 제목',
@@ -88,7 +108,70 @@ describe('InquiryService 유닛 테스트', () => {
         isSecret: false,
       };
       const mockInquiry = createInquiryMock(data);
+      const mockNotification = createNotificationMock();
       inquiryRepository.findProductByProductId.mockResolvedValue(mockFindProduct);
+      (prisma.$transaction as jest.MockedFunction<TxMock>).mockImplementation(async (cb) =>
+        cb(prisma as Prisma.TransactionClient),
+      );
+      inquiryRepository.createInquiry.mockResolvedValue(mockInquiry);
+      notificationService.createNotification.mockResolvedValue(mockNotification);
+
+      // --- 실행 (Act) ---
+      const result = await inquiryService.createInquiry(productId, userId, data);
+
+      const createData = {
+        title: data.title,
+        content: data.content,
+        isSecret: data.isSecret,
+        user: {
+          connect: {
+            id: userId,
+          },
+        },
+        product: {
+          connect: {
+            id: productId,
+          },
+        },
+      };
+
+      const notificationData = {
+        userId: mockFindProduct.store.userId,
+        content: `${mockFindProduct.name}에 새로운 문의가 등록되었습니다.`,
+      };
+
+      // --- 검증 (Assert) ---
+      expect(inquiryRepository.findProductByProductId).toHaveBeenCalledTimes(1);
+      expect(inquiryRepository.findProductByProductId).toHaveBeenCalledWith(productId);
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(inquiryRepository.createInquiry).toHaveBeenCalledTimes(1);
+      expect(inquiryRepository.createInquiry).toHaveBeenCalledWith(createData, prisma);
+      expect(notificationService.createNotification).toHaveBeenCalledTimes(1);
+      expect(notificationService.createNotification).toHaveBeenCalledWith(notificationData, prisma);
+      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      expect(sendMessageSpy).toHaveBeenCalledWith(mockNotification.userId, mockNotification);
+      expect(result).toEqual(mockInquiry);
+    });
+
+    it('문의 생성 성공 (자신 상품에 문의하여 알림이 생성되지 않음)', async () => {
+      // --- 준비 (Arrange) ---
+      const data = {
+        title: '문의 제목',
+        content: '문의 내용',
+        isSecret: false,
+      };
+      const mockInquiry = createInquiryMock(data);
+      const mockFindProductSameUser = {
+        ...mockFindProduct,
+        store: {
+          ...mockFindProduct.store,
+          userId,
+        },
+      };
+      inquiryRepository.findProductByProductId.mockResolvedValue(mockFindProductSameUser);
+      (prisma.$transaction as jest.MockedFunction<TxMock>).mockImplementation(async (cb) =>
+        cb(prisma as Prisma.TransactionClient),
+      );
       inquiryRepository.createInquiry.mockResolvedValue(mockInquiry);
 
       // --- 실행 (Act) ---
@@ -113,8 +196,11 @@ describe('InquiryService 유닛 테스트', () => {
       // --- 검증 (Assert) ---
       expect(inquiryRepository.findProductByProductId).toHaveBeenCalledTimes(1);
       expect(inquiryRepository.findProductByProductId).toHaveBeenCalledWith(productId);
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       expect(inquiryRepository.createInquiry).toHaveBeenCalledTimes(1);
-      expect(inquiryRepository.createInquiry).toHaveBeenCalledWith(createData);
+      expect(inquiryRepository.createInquiry).toHaveBeenCalledWith(createData, prisma);
+      expect(notificationService.createNotification).not.toHaveBeenCalled();
+      expect(sendMessageSpy).not.toHaveBeenCalled();
       expect(result).toEqual(mockInquiry);
     });
 
@@ -390,14 +476,77 @@ describe('InquiryService 유닛 테스트', () => {
 
   // 답변 생성
   describe('createReply', () => {
-    it('답변 생성 성공', async () => {
+    it('답변 생성 성공 (타인 문의에 답변하여 알림 생성)', async () => {
+      // --- 준비 (Arrange) ---
+      const data = {
+        content: '답변 내용',
+      };
+      const mockReply = createReplyMock(data);
+      const mockNotification = createNotificationMock();
+      inquiryRepository.findInquiryById.mockResolvedValue(mockInquiryOwnedByOtherUser);
+      (prisma.$transaction as jest.MockedFunction<TxMock>).mockImplementation(async (cb) =>
+        cb(prisma as Prisma.TransactionClient),
+      );
+      inquiryRepository.createReply.mockResolvedValue(mockReply);
+      inquiryRepository.updateStatusInquiry.mockResolvedValue(mockUpdateInquiryStatus);
+      notificationService.createNotification.mockResolvedValue(mockNotification);
+
+      // --- 실행 (Act) ---
+      const result = await inquiryService.createReply(inquiryId, userId, data);
+
+      const createData = {
+        content: data.content,
+        user: {
+          connect: {
+            id: userId,
+          },
+        },
+        inquiry: {
+          connect: {
+            id: inquiryId,
+          },
+        },
+      };
+      const updateData = {
+        status: InquiryStatus.CompletedAnswer,
+      };
+
+      const notificationData = {
+        userId: mockInquiryOwnedByOtherUser.userId,
+        content: `${mockInquiryOwnedByOtherUser.product.name}에 대한 문의에 답변이 달렸습니다.`,
+      };
+
+      // --- 검증 (Assert) ---
+      expect(inquiryRepository.findInquiryById).toHaveBeenCalledTimes(1);
+      expect(inquiryRepository.findInquiryById).toHaveBeenCalledWith(inquiryId);
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(inquiryRepository.createReply).toHaveBeenCalledTimes(1);
+      expect(inquiryRepository.createReply).toHaveBeenCalledWith(createData, prisma);
+      expect(inquiryRepository.updateStatusInquiry).toHaveBeenCalledTimes(1);
+      expect(inquiryRepository.updateStatusInquiry).toHaveBeenCalledWith(
+        updateData,
+        inquiryId,
+        prisma,
+      );
+      expect(notificationService.createNotification).toHaveBeenCalledTimes(1);
+      expect(notificationService.createNotification).toHaveBeenCalledWith(notificationData, prisma);
+      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      expect(sendMessageSpy).toHaveBeenCalledWith(mockNotification.userId, mockNotification);
+      expect(result).toEqual(mockReply);
+    });
+
+    it('답변 생성 성공 (자신 문의에 답변하여 알림이 생성되지 않음)', async () => {
       // --- 준비 (Arrange) ---
       const data = {
         content: '답변 내용',
       };
       const mockReply = createReplyMock(data);
       inquiryRepository.findInquiryById.mockResolvedValue(mockFindInquiry);
+      (prisma.$transaction as jest.MockedFunction<TxMock>).mockImplementation(async (cb) =>
+        cb(prisma as Prisma.TransactionClient),
+      );
       inquiryRepository.createReply.mockResolvedValue(mockReply);
+      inquiryRepository.updateStatusInquiry.mockResolvedValue(mockUpdateInquiryStatus);
 
       // --- 실행 (Act) ---
       const result = await inquiryService.createReply(inquiryId, userId, data);
@@ -422,8 +571,17 @@ describe('InquiryService 유닛 테스트', () => {
       // --- 검증 (Assert) ---
       expect(inquiryRepository.findInquiryById).toHaveBeenCalledTimes(1);
       expect(inquiryRepository.findInquiryById).toHaveBeenCalledWith(inquiryId);
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       expect(inquiryRepository.createReply).toHaveBeenCalledTimes(1);
-      expect(inquiryRepository.createReply).toHaveBeenCalledWith(createData, inquiryId, updateData);
+      expect(inquiryRepository.createReply).toHaveBeenCalledWith(createData, prisma);
+      expect(inquiryRepository.updateStatusInquiry).toHaveBeenCalledTimes(1);
+      expect(inquiryRepository.updateStatusInquiry).toHaveBeenCalledWith(
+        updateData,
+        inquiryId,
+        prisma,
+      );
+      expect(notificationService.createNotification).not.toHaveBeenCalled();
+      expect(sendMessageSpy).not.toHaveBeenCalled();
       expect(result).toEqual(mockReply);
     });
 
@@ -448,6 +606,7 @@ describe('InquiryService 유닛 테스트', () => {
       const mockFindInquiry_userId = {
         ...mockFindInquiry,
         product: {
+          name: '상품 이름',
           store: {
             userId: '다른 사용자 ID',
           },
