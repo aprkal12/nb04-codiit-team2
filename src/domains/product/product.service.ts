@@ -7,49 +7,51 @@ import {
   UpdateProductDto,
 } from './product.dto.js';
 import { ProductMapper } from './product.mapper.js';
-import { NotFoundError, ForbiddenError } from '@/common/utils/errors.js';
+import { NotFoundError, ForbiddenError, BadRequestError } from '@/common/utils/errors.js';
 
 export class ProductService {
   constructor(private productRepository: ProductRepository) {}
 
   // 상품 등록
   async createProduct(userId: string, data: CreateProductDto): Promise<DetailProductResponse> {
-    // 스토어 검증
     const store = await this.productRepository.findStoreByUserId(userId);
     if (!store) {
       throw new NotFoundError('스토어를 찾을 수 없습니다.');
     }
 
-    // 카테고리 검증
+    // [방어 코드] 카테고리 데이터 타입 불일치 방지
+    if (!data.categoryName || typeof data.categoryName !== 'string') {
+      throw new BadRequestError('유효하지 않은 카테고리 형식입니다.');
+    }
+
     const category = await this.productRepository.findCategoryByName(data.categoryName);
     if (!category) {
       throw new NotFoundError('카테고리가 없습니다.');
     }
 
-    // DB 저장용 데이터 준비
+    // [방어 코드] 스키마(default 0)가 있지만 서비스 레벨에서 한 번 더 보장 (유지)
+    const validatedDiscountRate =
+      data.discountRate !== undefined && data.discountRate !== null ? data.discountRate : 0;
+
     const productDataForDb = {
       name: data.name,
       price: data.price,
       content: data.content,
       image: data.image,
-      discountRate: data.discountRate,
+      discountRate: validatedDiscountRate,
       discountStartTime: data.discountStartTime ? new Date(data.discountStartTime) : null,
       discountEndTime: data.discountEndTime ? new Date(data.discountEndTime) : null,
       categoryId: category.id,
       stocks: data.stocks,
     };
 
-    // DB 저장
     const createdProduct = await this.productRepository.create(store.id, productDataForDb);
-
-    // 매퍼의 타입 요구사항(ProductDetailWithRelations)을 충족하기 위해 생성된 ID로 상세 정보를 다시 조회하여 반환합니다.
     const productDetail = await this.productRepository.findById(createdProduct.id);
 
     if (!productDetail) {
       throw new Error('상품 생성 후 조회에 실패했습니다.');
     }
 
-    // 응답 반환 (Mapper 사용)
     return ProductMapper.toDetailResponse(productDetail);
   }
 
@@ -81,18 +83,17 @@ export class ProductService {
     if (!productData) {
       throw new NotFoundError('상품을 찾을 수 없습니다.');
     }
-
-    if (!productData.store) {
-      throw new NotFoundError('상품에 연결된 스토어 정보가 없습니다.');
-    }
-
-    if (productData.store.userId !== userId) {
+    if (!productData.store || productData.store.userId !== userId) {
       throw new ForbiddenError('상품 수정 권한이 없습니다.');
     }
 
-    // 카테고리 변경 시 검증 및 ID 조회
     let categoryId: string | undefined = undefined;
     if (data.categoryName) {
+      // [방어 코드] 카테고리 타입 체크 (수정 시에도 유효)
+      if (typeof data.categoryName !== 'string') {
+        throw new BadRequestError('유효하지 않은 카테고리 형식입니다.');
+      }
+
       const category = await this.productRepository.findCategoryByName(data.categoryName);
       if (!category) {
         throw new NotFoundError('카테고리가 없습니다.');
@@ -106,7 +107,6 @@ export class ProductService {
         : data.discountStartTime
           ? new Date(data.discountStartTime)
           : undefined;
-
     const discountEndTime =
       data.discountEndTime === null
         ? null
@@ -114,14 +114,15 @@ export class ProductService {
           ? new Date(data.discountEndTime)
           : undefined;
 
+    // [수정] 불필요한 변수 선언 제거하고 data.discountRate 직접 사용
     const updatedProduct = await this.productRepository.update(productId, {
       name: data.name,
       price: data.price,
       content: data.content,
       image: data.image,
-      discountRate: data.discountRate,
+      discountRate: data.discountRate, // undefined면 Prisma가 무시(기존 값 유지)
       isSoldOut: data.isSoldOut,
-      stocks: data.stocks, // 재고는 필수값이므로 그대로 전달
+      stocks: data.stocks,
       categoryId,
       discountStartTime,
       discountEndTime,
