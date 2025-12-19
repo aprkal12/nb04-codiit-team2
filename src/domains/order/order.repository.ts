@@ -1,4 +1,4 @@
-import { Prisma, PrismaClient } from '@prisma/client';
+import { OrderStatus, PaymentStatus, Prisma, PrismaClient } from '@prisma/client';
 import {
   CreateOrderItemRepoInput,
   CreateOrderRawData,
@@ -39,6 +39,20 @@ export class OrderRepository {
       },
       select: {
         status: true,
+      },
+    });
+  }
+  /**
+   * 주문 상태 업데이트
+   */
+  async updateStatus(orderId: string, status: OrderStatus, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma;
+    return await db.order.update({
+      where: {
+        id: orderId,
+      },
+      data: {
+        status,
       },
     });
   }
@@ -182,6 +196,9 @@ export class OrderRepository {
       },
       skip,
       take,
+      orderBy: {
+        createdAt: 'desc',
+      },
     });
   }
   /**
@@ -294,6 +311,25 @@ export class OrderRepository {
     return await db.payment.delete({
       where: {
         id: paymentId,
+      },
+    });
+  }
+  /**
+   * 결제 상태 업데이트
+   * 논리적 삭제 처리 가능
+   */
+  async updatePaymentStatus(
+    paymentId: string,
+    status: PaymentStatus,
+    tx?: Prisma.TransactionClient,
+  ) {
+    const db = tx ?? this.prisma;
+    return await db.payment.update({
+      where: {
+        id: paymentId,
+      },
+      data: {
+        status,
       },
     });
   }
