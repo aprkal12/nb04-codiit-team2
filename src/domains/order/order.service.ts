@@ -8,7 +8,7 @@ import {
 } from '@/domains/order/order.dto.js';
 import { OrderRepository } from '@/domains/order/order.repository.js';
 import type { NotificationService } from '@/domains/notification/notification.service.js';
-import { OrderStatus, PaymentStatus, PrismaClient } from '@prisma/client';
+import { OrderStatus, PaymentStatus, PointHistoryType, PrismaClient } from '@prisma/client';
 import { CreateOrderItemInputWithPrice } from '@/domains/order/order.type.js';
 import {
   BadRequestError,
@@ -86,7 +86,7 @@ export class OrderService {
     let paymentData = {} as CreatePaymentRepoInput;
     // 사전 체크 (사용할 포인트가 현재 유저가 가지고 있는 총 포인트보다 같거나 작은지)
     // 프론트에서 이미 막히지만 방어적 코드
-    const user = await this.orderRepository.findUserPoint(userId);
+    const user = await this.orderRepository.findUserInfo(userId);
     if (!user) {
       throw new UnauthorizedError('사용자를 찾을 수 없습니다.');
     }
@@ -149,10 +149,10 @@ export class OrderService {
       // 1-3. 포인트를 사용한 경우 포인트 차감
       if (usePoint > 0) {
         // 1-3-1. 포인트 차감
-        await this.orderRepository.decreasePoint({ userId, usePoint }, tx);
+        await this.orderRepository.decreasePoint({ userId, amount: usePoint }, tx);
         // 1-3-2. 포인트 히스토리 생성
-        await this.orderRepository.createUsePointHistory(
-          { userId, orderId: order.id, usePoint },
+        await this.orderRepository.createPointHistory(
+          { userId, orderId: order.id, amount: usePoint, type: PointHistoryType.USE },
           tx,
         );
       }
@@ -251,6 +251,28 @@ export class OrderService {
       // 주문 성공 후 프론트쪽에서 /api/cart/{cartId} delete로 주문이 들어간 아이템들만 삭제 요청 보내는 것 확인
       // 유저의 장바구니가 생성되면 삭제하지 않고 주문할 때마다 주문한 아이템들만 삭제하는 방식인 것 같음
 
+      // 1-6 포인트 적립
+      // 현재 주문으로 등급이 변동된다고 해도 다음 주문부터 적용
+      // 현재 주문에서는 현재 등급으로 적립 포인트 계산
+      const userGrade = user.grade;
+      if (!userGrade) {
+        console.error('포인트 적립 중 유저 등급 조회 실패');
+        throw new InternalServerError();
+      }
+      const rawEarnedPoint = Math.floor(finalPaymentPrice * userGrade.rate);
+      const earnedPoint = rawEarnedPoint < 0 ? 0 : rawEarnedPoint;
+      if (earnedPoint > 0) {
+        await this.orderRepository.increasePoint({ userId, amount: earnedPoint }, tx);
+        await this.orderRepository.createPointHistory(
+          {
+            userId,
+            orderId: order.id,
+            amount: earnedPoint,
+            type: PointHistoryType.EARN,
+          },
+          tx,
+        );
+      }
       return { orderId: order.id, ssePayloads };
     });
 
@@ -268,6 +290,12 @@ export class OrderService {
       });
     }
 
+    // 4. 유저 등급 업데이트
+    // 포인트 적립은 사용한 포인트를 제외한 실제 결제 가격 기준으로 적립
+    // 등급은 총 결제 가격(실제 결제 가격 + 사용한 포인트)을 기준으로 업데이트
+    // 기준 통일 논의 필요
+
+    // + 트랜잭션 내부로 추가?
     await this.userService.updateGradeByPurchase(userId);
 
     return createdOrder;
@@ -314,20 +342,53 @@ export class OrderService {
       }
       // await this.orderRepository.updatePaymentStatus(order.payments.id, PaymentStatus.Cancelled, tx);
       await this.orderRepository.deletePayment(order.payments.id, tx);
-      // 2-3. 포인트 환불
+      // 2-3. 사용한 포인트가 있다면 포인트 환불
       if (order.usePoint > 0) {
         const usePoint = order.usePoint;
         // 2-3-1. 포인트 환불
-        await this.orderRepository.increasePoint({ userId, usePoint }, tx);
+        await this.orderRepository.increasePoint({ userId, amount: usePoint }, tx);
         // 2-3-2. 포인트 히스토리 생성
-        await this.orderRepository.createRestorePointHistory(
-          { userId, orderId: order.id, usePoint },
+        await this.orderRepository.createPointHistory(
+          { userId, orderId: order.id, amount: usePoint, type: PointHistoryType.REFUND },
           tx,
         );
       }
-      // 2-4. 최종 주문 삭제 (추후 논리적 삭제로 상태만 변경하면 됨)
+      // 2-4 적립된 포인트 회수
+      const earnedHistory = await this.orderRepository.findPointHistory(
+        { orderId: order.id, userId, type: PointHistoryType.EARN },
+        tx,
+      );
+      if (earnedHistory) {
+        const earnedAmount = earnedHistory.amount;
+        const userInfo = await this.orderRepository.findUserInfo(userId, tx);
+        if (!userInfo) {
+          throw new InternalServerError('유저 정보를 찾을 수 없습니다.');
+        }
+        if (userInfo.point < earnedAmount) {
+          throw new BadRequestError(
+            '보유 포인트가 적립됐던 포인트보다 적어 주문 취소를 진행할 수 없습니다.',
+          );
+        }
+        // 2-4-1. 포인트 차감 (회수)
+        await this.orderRepository.decreasePoint({ userId, amount: earnedAmount }, tx);
+        // 2-4-2. 적립 취소 히스토리 생성
+        await this.orderRepository.createPointHistory(
+          {
+            userId,
+            orderId: order.id,
+            amount: earnedAmount,
+            type: PointHistoryType.EARN_CANCEL,
+          },
+          tx,
+        );
+      }
+      // 2-5. 최종 주문 삭제 (추후 논리적 삭제로 상태만 변경하면 됨)
       // await this.orderRepository.updateStatus(order.id, OrderStatus.Cancelled, tx);
       await this.orderRepository.deleteOrder(order.id, tx);
     });
+    // 주문 취소 시 등급 변동 여부 계산
+    // 주문을 취소해서 누적 주문 금액이 다시 미달되면 등급이 하락?
+    // 한번 승급한 등급은 일정 기간 동안 그대로 유지시키기?
+    await this.userService.updateGradeByPurchase(userId);
   }
 }
