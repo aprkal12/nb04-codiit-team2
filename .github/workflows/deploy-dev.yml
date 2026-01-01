@@ -163,7 +163,7 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/codiit-key.pem
           chmod 400 ~/.ssh/codiit-key.pem
-          ssh-keyscan -H ${{ steps.get-ip.outputs.public_ip }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ steps.get-ip.outputs.public_ip }} >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Create .env file locally
         run: |
@@ -473,6 +473,7 @@ jobs:
             **인스턴스**: ${{ steps.ec2-setup.outputs.instance_id }}
             **워크플로우**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           color: 0x00FF00
+          nodetail: true
 
       - name: Send Discord notification on failure
         if: failure()
@@ -489,3 +490,4 @@ jobs:
             **인스턴스**: ${{ steps.ec2-setup.outputs.instance_id || 'N/A' }}
             **로그**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           color: 0xFF0000
+          nodetail: true
