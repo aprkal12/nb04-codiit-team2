@@ -17,14 +17,14 @@ import type {
 export const TEST_PASSWORD = 'test1234';
 
 // ============================================
-// Grade (User 생성에 필요)
+// Grade (User 생성에 필요) - createTestContext에서 직접 사용되지 않음
 // ============================================
+/*
 interface CreateGradeOptions {
   name?: string;
   minAmount?: number;
   rate?: number;
 }
-
 export const createTestGrade = async (overrides: CreateGradeOptions = {}): Promise<Grade> => {
   return prisma.grade.create({
     data: {
@@ -34,7 +34,7 @@ export const createTestGrade = async (overrides: CreateGradeOptions = {}): Promi
     },
   });
 };
-
+*/
 // ============================================
 // User
 // ============================================
@@ -159,14 +159,10 @@ export interface TestContext {
   buyer: User;
 }
 
-interface CreateTestContextOptions {
-  grade?: CreateGradeOptions;
-}
-
-export const createTestContext = async (
-  options: CreateTestContextOptions = {},
-): Promise<TestContext> => {
-  const grade = await createTestGrade(options.grade);
+export const createTestContext = async (): Promise<TestContext> => {
+  const grade = await prisma.grade.findUniqueOrThrow({
+    where: { id: 'grade_green' },
+  });
   const seller = await createTestSeller(grade.id);
   const buyer = await createTestBuyer(grade.id);
 
@@ -182,10 +178,8 @@ export interface SellerWithProductContext extends TestContext {
   product: Product;
 }
 
-export const createSellerWithProduct = async (
-  options: CreateTestContextOptions = {},
-): Promise<SellerWithProductContext> => {
-  const { grade, seller, buyer } = await createTestContext(options);
+export const createSellerWithProduct = async (): Promise<SellerWithProductContext> => {
+  const { grade, seller, buyer } = await createTestContext();
   const store = await createTestStore(seller.id);
   const category = await createTestCategory();
   const product = await createTestProduct({
