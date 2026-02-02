@@ -9,7 +9,7 @@ import { orderService } from '@/domains/order/order.container.js';
 // HTTP 서버 생성 (graceful shutdown을 위해 명시적 생성)
 const server = http.createServer(app);
 
-server.listen(env.PORT, () => {
+server.listen(env.PORT, '0.0.0.0', () => {
   logger.info(`🚀 Server is running on http://localhost:${env.PORT}`);
   logger.info(`📦 Environment: ${env.NODE_ENV}`);
 });
