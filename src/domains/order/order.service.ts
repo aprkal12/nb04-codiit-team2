@@ -500,4 +500,32 @@ export class OrderService {
       }
     });
   }
+
+  async cancelAllWaitingPaymentOrders() {
+    const waitingOrders = await this.orderRepository.findWaitingPaymentOrders();
+    if (waitingOrders.length === 0) {
+      return { message: 'No waiting payment orders to cancel.' };
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const order of waitingOrders) {
+        // 1. Restore stock
+        for (const item of order.orderItems) {
+          await this.orderRepository.restoreReservedStock(
+            {
+              productId: item.productId,
+              sizeId: item.sizeId,
+              quantity: item.quantity,
+            },
+            tx,
+          );
+        }
+
+        // 2. Update order status to Cancelled
+        await this.orderRepository.updateStatus(order.id, OrderStatus.Cancelled, tx);
+      }
+    });
+
+    return { message: `${waitingOrders.length} orders have been cancelled.` };
+  }
 }

@@ -285,6 +285,25 @@ export class OrderRepository {
     });
   }
 
+  async findWaitingPaymentOrders(tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma;
+    return db.order.findMany({
+      where: {
+        status: OrderStatus.WaitingPayment,
+      },
+      select: {
+        id: true,
+        orderItems: {
+          select: {
+            productId: true,
+            sizeId: true,
+            quantity: true,
+          },
+        },
+      },
+    });
+  }
+
   // 다른 도메인 쿼리들
   /**
    * 재고 복구
