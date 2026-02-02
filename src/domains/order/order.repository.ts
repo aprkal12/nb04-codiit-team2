@@ -308,35 +308,96 @@ export class OrderRepository {
   /**
    * 재고 복구
    */
+  // async restoreReservedStock(
+  //   { productId, sizeId, quantity }: UpdateStockRepoInput,
+  //   tx?: Prisma.TransactionClient,
+  // ) {
+  //   const db = tx ?? this.prisma;
+  //   return db.$executeRaw`
+  //     UPDATE stocks
+  //     SET reserved_quantity = reserved_quantity - ${quantity}
+  //     WHERE product_id = ${productId}
+  //       AND size_id = ${sizeId}
+  //       AND reserved_quantity >= ${quantity};
+  //   `;
+  // }
   async restoreReservedStock(
     { productId, sizeId, quantity }: UpdateStockRepoInput,
     tx?: Prisma.TransactionClient,
   ) {
     const db = tx ?? this.prisma;
-    return db.$executeRaw`
-      UPDATE stocks
-      SET reserved_quantity = reserved_quantity - ${quantity}
-      WHERE product_id = ${productId}
-        AND size_id = ${sizeId}
-        AND reserved_quantity >= ${quantity};
-    `;
+    const result = await db.stock.updateMany({
+      where: {
+        productId,
+        sizeId,
+        reservedQuantity: {
+          gte: quantity,
+        },
+      },
+      data: {
+        reservedQuantity: {
+          decrement: quantity,
+        },
+      },
+    });
+    return result.count;
   }
   /**
    * 재고 예약 (주문 시점에 재고 locking)
    * 정합성 때문에 raw query
    */
+  // async reserveStock(
+  //   { productId, sizeId, quantity }: UpdateStockRepoInput,
+  //   tx?: Prisma.TransactionClient,
+  // ) {
+  //   const db = tx ?? this.prisma;
+  //   return await db.$executeRaw`
+  //     UPDATE stocks
+  //     SET reserved_quantity = reserved_quantity + ${quantity}
+  //     WHERE product_id = ${productId}
+  //       AND size_id = ${sizeId}
+  //       AND quantity - reserved_quantity >= ${quantity};
+  //   `;
+  // }
   async reserveStock(
     { productId, sizeId, quantity }: UpdateStockRepoInput,
     tx?: Prisma.TransactionClient,
   ) {
     const db = tx ?? this.prisma;
-    return await db.$executeRaw`
-      UPDATE stocks
-      SET reserved_quantity = reserved_quantity + ${quantity}
-      WHERE product_id = ${productId}
-        AND size_id = ${sizeId}
-        AND quantity - reserved_quantity >= ${quantity};
-    `;
+
+    // 1. 재고 조회 (Read) - 여기서 Race Condition 유발 지점
+    const stock = await db.stock.findUnique({
+      where: {
+        productId_sizeId: {
+          productId,
+          sizeId,
+        },
+      },
+    });
+
+    // 2. 재고 확인 (in Application)
+    if (!stock || stock.quantity - stock.reservedQuantity < quantity) {
+      return 0;
+    }
+
+    // 3. 재고 예약 (Write)
+    try {
+      await db.stock.updateMany({
+        where: {
+          id: stock.id,
+          reservedQuantity: stock.reservedQuantity,
+        },
+        data: {
+          reservedQuantity: {
+            increment: quantity,
+          },
+        },
+      });
+      return 1;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (error) {
+      return 0;
+    }
   }
   /**
    * 결제 정보 조회
@@ -582,20 +643,45 @@ export class OrderRepository {
   /**
    * 재고 감소 처리
    **/
+  // async decreaseStock(
+  //   { productId, sizeId, quantity }: UpdateStockRepoInput,
+  //   tx?: Prisma.TransactionClient,
+  // ) {
+  //   const db = tx ?? this.prisma;
+  //   return await db.$executeRaw`
+  //     UPDATE stocks
+  //     SET
+  //       quantity = quantity - ${quantity},
+  //       reserved_quantity = reserved_quantity - ${quantity}
+  //     WHERE product_id = ${productId}
+  //       AND size_id = ${sizeId}
+  //       AND reserved_quantity >= ${quantity};
+  //   `;
+  // }
   async decreaseStock(
+    // orm 문법으로 그나마 원자성을 챙기는 코드
     { productId, sizeId, quantity }: UpdateStockRepoInput,
     tx?: Prisma.TransactionClient,
   ) {
     const db = tx ?? this.prisma;
-    return await db.$executeRaw`
-      UPDATE stocks
-      SET
-        quantity = quantity - ${quantity},
-        reserved_quantity = reserved_quantity - ${quantity}
-      WHERE product_id = ${productId}
-        AND size_id = ${sizeId}
-        AND reserved_quantity >= ${quantity};
-    `;
+    const result = await db.stock.updateMany({
+      where: {
+        productId,
+        sizeId,
+        reservedQuantity: {
+          gte: quantity,
+        },
+      },
+      data: {
+        quantity: {
+          decrement: quantity,
+        },
+        reservedQuantity: {
+          decrement: quantity,
+        },
+      },
+    });
+    return result.count; // 영향을 받은 row의 수를 반환
   }
   /**
    * 재고 연관 데이터 조회
