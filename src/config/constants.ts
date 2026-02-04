@@ -30,15 +30,15 @@ const envSchema = z.object({
   AWS_S3_BUCKET: z.string(),
 
   // Logging
-  SLOW_QUERY_THRESHOLD_MS: z.coerce.number().min(1).default(1000),
+  SLOW_QUERY_THRESHOLD_MS: z.coerce.number().min(1).default(100000),
 
   // Rate Limiting
   RATE_LIMIT_WINDOW: z.string().default('15m'),
-  RATE_LIMIT_MAX: z.coerce.number().default(300),
+  RATE_LIMIT_MAX: z.coerce.number().default(300000),
   RATE_LIMIT_AUTH_LOGIN_WINDOW: z.string().default('15m'),
-  RATE_LIMIT_AUTH_LOGIN_MAX: z.coerce.number().default(5),
+  RATE_LIMIT_AUTH_LOGIN_MAX: z.coerce.number().default(50),
   RATE_LIMIT_AUTH_REFRESH_WINDOW: z.string().default('1m'),
-  RATE_LIMIT_AUTH_REFRESH_MAX: z.coerce.number().default(30),
+  RATE_LIMIT_AUTH_REFRESH_MAX: z.coerce.number().default(300),
 
   // Portone
   PORTONE_API_URL: z.string().default('https://api.iamport.kr'),
