@@ -6,6 +6,7 @@ import { notificationService } from '@/domains/notification/notification.contain
 import { UserRepository } from '@/domains/user/user.repository.js';
 import { UserService } from '@/domains/user/user.service.js';
 import { sseManager } from '@/common/utils/sse.manager.js';
+import { redisClient } from '@/config/redis.js';
 
 const orderRepository = new OrderRepository(prisma);
 const userRepository = new UserRepository();
@@ -16,6 +17,7 @@ export const orderService = new OrderService(
   prisma,
   userService,
   sseManager,
+  redisClient,
 );
 
 export const orderController = new OrderController(orderService);
