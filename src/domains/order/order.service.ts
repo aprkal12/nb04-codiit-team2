@@ -18,6 +18,8 @@ import {
 import { SseManager } from '@/common/utils/sse.manager.js';
 import { UserService } from '@/domains/user/user.service.js';
 import { buildOrderData } from '@/domains/order/order.utils.js';
+import { Redis } from 'ioredis';
+import { logger } from '@/config/logger.js';
 
 export class OrderService {
   constructor(
@@ -26,6 +28,7 @@ export class OrderService {
     private prisma: PrismaClient,
     private userService: UserService,
     private sseManager: SseManager,
+    private redisClient: Redis,
   ) {}
   private async validateOwner(userId: string, orderId: string) {
     const owner = await this.orderRepository.findOwnerById(orderId);
@@ -141,8 +144,15 @@ export class OrderService {
       }));
       await this.orderRepository.createOrderItems(orderItemsData, tx);
 
-      return { orderId: order.id };
+      return { orderId: order.id, expiresAt };
     });
+
+    await this.redisClient.zadd(
+      'order_expire_queue',
+      result.expiresAt.getTime(),
+      result.orderId.toString(),
+    );
+    logger.info(`[Redis] 주문 ${result.orderId} 만료 예약 등록 완료`);
 
     // 2. 주문 생성 결과 조회
     const createdOrder = await this.orderRepository.findById(result.orderId);
@@ -154,7 +164,7 @@ export class OrderService {
   }
 
   async confirmPayment(paymentId: string) {
-    console.log('[confirmPayment] confirmPayment 진입');
+    logger.info('[confirmPayment] confirmPayment 진입');
     // 1. 주문 정보 조회
     const payment = await this.orderRepository.findPaymentWithOrder(paymentId);
     if (!payment) {
@@ -179,7 +189,7 @@ export class OrderService {
     const ssePayloads: { userId: string; content: string }[] = [];
 
     const result = await this.prisma.$transaction(async (tx) => {
-      console.log('[confirmPayment] 트랜잭션 진입');
+      logger.info('[confirmPayment] 트랜잭션 진입');
       // 주문 상태 조회
       const orderStatus = await this.orderRepository.findStatusById(orderId, tx);
       if (!orderStatus) {
@@ -189,19 +199,19 @@ export class OrderService {
         // 이미 결제 완료된 주문 요청이 올 시 종료
         return null;
       }
-      console.log('[confirmPayment] 중복 진입 방지 통과');
+      logger.info('[confirmPayment] 중복 진입 방지 통과');
       if (orderStatus.status === OrderStatus.Cancelled) {
         // 결제 대기 상태로 만료되거나 취소된 주문이 올 시 종료
         return null;
       }
-      console.log('[confirmPayment] 취소/만료된 주문 체크');
+      logger.info('[confirmPayment] 취소/만료된 주문 체크');
       const paymentStatus = await this.orderRepository.findPaymentStatusById(paymentId, tx);
       if (!paymentStatus || paymentStatus.status !== PaymentStatus.paid) {
         // 중복 호출 방지
         // 이미 트랜잭션이 시작된 주문 처리의 결제 상태는 paid가 아님
         return null;
       }
-      console.log('[confirmPayment] 결제 상태 확인 완료, 주문 확정 처리 시작');
+      logger.info('[confirmPayment] 결제 상태 확인 완료, 주문 확정 처리 시작');
       // 결제 상태 locking
       await this.orderRepository.updatePaymentStatus(paymentId, PaymentStatus.processing, tx);
       if (usePoint > 0) {
@@ -213,7 +223,7 @@ export class OrderService {
           tx,
         );
       }
-      console.log('[confirmPayment] 포인트 차감 완료');
+      logger.info('[confirmPayment] 포인트 차감 완료');
       const stockUpdatePromises = orderItems.map(async (orderItem) => {
         const stockData = {
           productId: orderItem.productId,
@@ -235,7 +245,7 @@ export class OrderService {
         if (!updatedStock) {
           throw new InternalServerError('재고 연관 데이터 조회 실패');
         }
-        console.log('[confirmPayment] 재고 감소 완료');
+        logger.info('[confirmPayment] 재고 감소 완료');
         if (updatedStock.quantity === 0) {
           // 1-5-1. 판매자 알림 생성
           const productName = updatedStock.product.name;
@@ -287,7 +297,7 @@ export class OrderService {
 
         return updatedStock;
       });
-      console.log('[confirmPayment] 재고 관련 알림 생성 완료');
+      logger.info('[confirmPayment] 재고 관련 알림 생성 완료');
       await Promise.all(stockUpdatePromises);
       // 장바구니 삭제는 따로 안하는 것 같음
       // 주문 성공 후 프론트쪽에서 /api/cart/{cartId} delete로 주문이 들어간 아이템들만 삭제 요청 보내는 것 확인
@@ -320,7 +330,7 @@ export class OrderService {
           tx,
         );
       }
-      console.log('[confirmPayment] 포인트 적립 완료');
+      logger.info('[confirmPayment] 포인트 적립 완료');
       // 결제 상태 locking 해제
       await this.orderRepository.updatePaymentStatus(paymentId, PaymentStatus.completed, tx);
       // 주문 상태 최종 변경
@@ -330,7 +340,7 @@ export class OrderService {
     if (!result) {
       return; // 이미 처리된 결제인경우 트랜잭션에서 에러대신 null 리턴
     }
-    console.log('[confirmPayment] 트랜잭션 성공');
+    logger.info('[confirmPayment] 트랜잭션 성공');
     // 2. 최종 결과 조회
     const createdOrder = await this.orderRepository.findById(result.orderId);
     if (!createdOrder) {
@@ -350,7 +360,7 @@ export class OrderService {
       userId: buyerId,
       content: buyerNotificationMsg,
     });
-    console.log('[confirmPayment] 주문 완료 알림 추가');
+    logger.info('[confirmPayment] 주문 완료 알림 추가');
     // 3. SSE 알림 전송 (트랜잭션 성공 확인 후)
     // 판매자 알림(객체)과 구매자 알림(배열)이 모두 포함된 배열을 순회
     if (result.ssePayloads.length > 0) {
@@ -358,7 +368,7 @@ export class OrderService {
         this.sseManager.sendMessage(payload.userId, payload);
       });
     }
-    console.log('[confirmPayment] 알림 발송 완료');
+    logger.info('[confirmPayment] 알림 발송 완료');
     // 4. 유저 등급 업데이트
     // 포인트 적립은 사용한 포인트를 제외한 실제 결제 가격 기준으로 적립
     // 등급은 총 결제 가격(실제 결제 가격 + 사용한 포인트)을 기준으로 업데이트
@@ -366,7 +376,7 @@ export class OrderService {
 
     // + 트랜잭션 내부로 추가?
     await this.userService.updateGradeByPurchase(buyerId);
-    console.log('[confirmPayment] 종료');
+    logger.info('[confirmPayment] 종료');
     return createdOrder;
   }
   async updateOrder({ orderId, userId, name, phone, address }: UpdateOrderServiceInput) {
@@ -396,7 +406,7 @@ export class OrderService {
     }
     // 결제전 취소일 경우 주문 만료와 동일하게 처리
     if (orderStatus.status === OrderStatus.WaitingPayment) {
-      return this.expireWaitingOrder();
+      return this.expireWaitingOrder(orderId);
     }
     // 2. 주문 삭제 트랜잭션
     await this.prisma.$transaction(async (tx) => {
@@ -475,29 +485,27 @@ export class OrderService {
     // 한번 승급한 등급은 일정 기간 동안 그대로 유지시키기?
     await this.userService.updateGradeByPurchase(userId);
   }
-  async expireWaitingOrder() {
-    const expiredOrders = await this.orderRepository.findExpiredWaitingOrders();
-    if (expiredOrders.length === 0) {
-      return;
-    }
-
+  async expireWaitingOrder(orderId: string) {
     await this.prisma.$transaction(async (tx) => {
-      for (const order of expiredOrders) {
-        // 1. 재고 복구
-        for (const item of order.orderItems) {
-          await this.orderRepository.restoreReservedStock(
-            {
-              productId: item.productId,
-              sizeId: item.sizeId,
-              quantity: item.quantity,
-            },
-            tx,
-          );
-        }
-
-        // 2. 주문 상태 만료 처리
-        await this.orderRepository.updateStatus(order.id, OrderStatus.Cancelled, tx);
+      const expiredOrderInfo = await this.orderRepository.getExpiredOrderInfo(orderId, tx);
+      if (!expiredOrderInfo) {
+        // 요청 하는 사이에 결제되거나 취소된 경우
+        return;
       }
+      // 1. 재고 복구
+      for (const item of expiredOrderInfo.orderItems) {
+        await this.orderRepository.restoreReservedStock(
+          {
+            productId: item.productId,
+            sizeId: item.sizeId,
+            quantity: item.quantity,
+          },
+          tx,
+        );
+      }
+
+      // 2. 주문 상태 만료 처리
+      await this.orderRepository.updateStatus(orderId, OrderStatus.Cancelled, tx);
     });
   }
 

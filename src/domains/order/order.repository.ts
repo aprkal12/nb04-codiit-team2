@@ -263,17 +263,14 @@ export class OrderRepository {
   /**
    * 만료된 주문 체크
    */
-  async findExpiredWaitingOrders(tx?: Prisma.TransactionClient) {
+  async getExpiredOrderInfo(orderId: string, tx?: Prisma.TransactionClient) {
     const db = tx ?? this.prisma;
-    return db.order.findMany({
+    return db.order.findUnique({
       where: {
+        id: orderId,
         status: OrderStatus.WaitingPayment,
-        expiresAt: {
-          lt: new Date(),
-        },
       },
       select: {
-        id: true,
         orderItems: {
           select: {
             productId: true,
