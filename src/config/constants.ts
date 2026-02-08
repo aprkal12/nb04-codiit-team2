@@ -44,6 +44,8 @@ const envSchema = z.object({
   PORTONE_API_URL: z.string().default('https://api.iamport.kr'),
   PORTONE_API_KEY: z.string(),
   PORTONE_API_SECRET: z.string(),
+
+  REDIS_URL: z.string().default('redis://localhost:6379'),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
