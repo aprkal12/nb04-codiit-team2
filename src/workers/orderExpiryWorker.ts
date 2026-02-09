@@ -1,10 +1,14 @@
-import { redisClient } from '@/config/redis.js';
-import { logger } from '@/config/logger.js';
-import { orderService } from '@/domains/order/order.container.js';
+import { loadEnvFromSSM } from '@/config/loadEnv.js';
 
 const QUEUE_KEY = 'order_expire_queue';
 
 export async function startOrderExpiryWorker() {
+  await loadEnvFromSSM();
+
+  const { redisClient } = await import('@/config/redis.js');
+  const { logger } = await import('@/config/logger.js');
+  const { orderService } = await import('@/domains/order/order.container.js');
+
   logger.info('👷 주문 만료 처리 워커가 시작되었습니다. (1초 간격 감시)');
 
   // 1초마다 반복
