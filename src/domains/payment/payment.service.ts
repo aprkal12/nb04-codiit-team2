@@ -54,6 +54,13 @@ export class PaymentService {
       logger.info('[WEBHOOK] 결제 단건 조회');
       const { data } = await axios.get(`${this.PORTONE_BASE_URL}/payments/${imp_uid}`, {
         headers: { Authorization: token },
+        params: {
+          // 포트원의 보안조치로 추가된 파라미터
+          // 테스트 채널을 악용한 결제 위변조를 방지하기 위해 기본적으로 테스트 결제 내역은
+          // 콘솔이 아닌 api를 통해서는 결제 조회가 불가능 하게 변경됨
+          // include_sandbox를 true로 설정해줘야 테스트 결제도 결제 조회 가능 내역에 포함됨
+          include_sandbox: true,
+        },
       });
 
       const payment = data.response;
